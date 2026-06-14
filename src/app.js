@@ -3,14 +3,14 @@
 (function () {
 'use strict';
 
+// Costumes/backdrops are named placeholders here — this build authors logic
+// only; you add the artwork in Scratch after importing the .sb3.
 const SAMPLE = [
+  '// Costumes and backdrops are named placeholders.',
+  '// Add their artwork in Scratch after importing the .sb3.',
   'stage',
   '    backdrop Day',
-  '        canvas (480) (360)',
-  '        rect (0) (0) (480) (360) [#88ccff c]',
   '    backdrop Night',
-  '        canvas (480) (360)',
-  '        rect (0) (0) (480) (360) [#111133 c]',
   '    when green flag clicked',
   '        switch backdrop to [Day v]',
   '    when backdrop switches to [Night v]',
@@ -18,10 +18,6 @@ const SAMPLE = [
   '',
   'character Player',
   '    costume PlayerFace',
-  '        canvas (64) (64)',
-  '        circle (32) (32) (28) [#ffcc66 c]',
-  '        circle (22) (25) (4) [#000000 c]',
-  '        circle (42) (25) (4) [#000000 c]',
   '    position x: (0) y: (-100)',
   '    when flag clicked',
   '        go to x: (0) y: (-100)',
@@ -29,8 +25,6 @@ const SAMPLE = [
   '',
   'sprite Enemy',
   '    costume EnemyBlock',
-  '        canvas (48) (48)',
-  '        rect (4) (4) (40) (40) [#ff3333 c]',
   '    when flag clicked',
   '        show',
 ].join('\n');
@@ -83,7 +77,9 @@ function render() {
 
   try {
     currentProject = COMPILE.compile(program);
-    downloadBtn.disabled = false;
+    // Don't allow exporting a project that still has errors — e.g. an attempt to
+    // draw or import a costume, which this build deliberately does not support.
+    downloadBtn.disabled = errors.length > 0;
   } catch (e) {
     showErrors(errors.concat([{ line: 0, msg: 'Compile error: ' + e.message }]), warnings);
     currentProject = null;

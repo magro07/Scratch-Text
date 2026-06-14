@@ -17,10 +17,9 @@ The editor runs entirely in the browser. There is no build step.
    - Choose `File` -> `Load from your computer`
    - Select the downloaded `.sb3` file
 
-For projects that only use text-authored vector costumes and backdrops, opening
-`index.html` directly is enough. If you reference external asset files with
-`from "assets/file.svg"` or `from "assets/file.png"` and your browser blocks
-local file loading, serve the folder with a small local static server:
+Opening `index.html` directly in a browser is all you need — this build loads
+no external files. If you would rather serve it over HTTP, run a small static
+server from the project root:
 
 ```bash
 cd Scratch-Text
@@ -38,11 +37,7 @@ http://localhost:8000/index.html
 ```text
 stage
     backdrop Day
-        canvas (480) (360)
-        rect (0) (0) (480) (360) [#88ccff c]
     backdrop Night
-        canvas (480) (360)
-        rect (0) (0) (480) (360) [#111133 c]
 
     when green flag clicked
         switch backdrop to [Day v]
@@ -52,10 +47,6 @@ stage
 
 sprite Player
     costume Idle
-        canvas (64) (64)
-        circle (32) (32) (28) [#ffcc66 c]
-        circle (22) (25) (4) [#000000 c]
-        circle (42) (25) (4) [#000000 c]
 
     position x: (0) y: (-100)
     size (100)
@@ -68,15 +59,14 @@ sprite Player
 
 sprite Enemy
     costume Default
-        canvas (48) (48)
-        rect (4) (4) (40) (40) [#ff3333 c]
 
     when flag clicked
         show
 ```
 
 This produces one Scratch Stage target with two backdrops and two sprite
-targets, `Player` and `Enemy`.
+targets, `Player` and `Enemy`. The `backdrop`/`costume` lines are named
+placeholders — open the `.sb3` in Scratch to give them real artwork.
 
 ## The Editor Layout
 
@@ -179,12 +169,7 @@ Stage.
 ```text
 stage
     backdrop Blue
-        canvas (480) (360)
-        rect (0) (0) (480) (360) [#4c97ff c]
-
     backdrop Red
-        canvas (480) (360)
-        rect (0) (0) (480) (360) [#ff3333 c]
 
     current backdrop [Blue v]
 
@@ -234,93 +219,42 @@ horizontally so they do not all start in the exact same spot.
 
 ## Costumes And Backdrops
 
-A `costume` section defines a sprite costume. A `backdrop` section defines a
-Stage costume.
+**This build does not create or import artwork.** It authors a project's
+*logic and structure* — scripts, sprites, variables, lists, broadcasts — and
+leaves the **graphics to you**: you draw or upload them in Scratch (or
+TurboWarp) after importing the `.sb3`.
 
-> **Coordinate system — read this first.** Costume shapes use **SVG
-> coordinates**: `(0, 0)` is the **top-left corner** of the canvas, x grows
-> right and y grows **down**. The centre of a `(w, h)` canvas is `(w/2, h/2)`.
-> These are **not** Scratch *stage* coordinates (which are centred on `(0, 0)`
-> and allow negatives). Drawing a shape at `(0, 0)` or with negative numbers
-> puts it in the top-left corner — a very common mistake. The editor's Problems
-> panel warns when shapes fall outside the canvas.
+So a `costume` or `backdrop` line is just a **named placeholder**:
 
 ```text
 sprite Player
-    costume Face
-        canvas (64) (64)
-        circle (32) (32) (28) [#ffcc66 c]
-        circle (22) (25) (4) [#000000 c]
-        circle (42) (25) (4) [#000000 c]
-        line (22) (43) (42) (43) [#000000 c] (3)
+    costume Idle
+    costume Hurt
+
+stage
+    backdrop Day
+    backdrop Night
 ```
 
-Here the canvas is `64 x 64`, so its centre is `(32, 32)` — that is where the
-big face circle sits, with the eyes above it and the mouth below.
+This gives `Player` two costumes named `Idle` and `Hurt`, and the Stage two
+backdrops named `Day` and `Night`. Each starts as a small default placeholder
+image. Open the project in Scratch and draw or upload the real artwork for each
+named costume — the names are what your scripts (`switch costume to [Idle v]`,
+`next costume`, …) refer to.
 
-Shape lines are indented under the costume or backdrop.
+What is deliberately **not** supported in this build:
 
-| Shape | Syntax |
-| --- | --- |
-| Canvas size | `canvas (width) (height)` |
-| Rotation center | `center (x) (y)` |
-| Circle | `circle (cx) (cy) (r) [#color c]` |
-| Ellipse | `ellipse (cx) (cy) (rx) (ry) [#color c]` |
-| Rectangle | `rect (x) (y) (width) (height) [#color c]` |
-| Rounded rectangle | `roundrect (x) (y) (width) (height) (radius) [#color c]` |
-| Line | `line (x1) (y1) (x2) (y2) [#color c] (width)` |
-| Text | `text [label] (x) (y) (fontSize) [#color c]` |
-| Polygon | `polygon [x,y x,y x,y] [#color c]` |
+- **Drawing costumes in text** with shape lines (`canvas`, `circle`, `rect`,
+  `line`, `text`, `polygon`, …). These are rejected with an error.
+- **Importing image files** with `costume Name from "file.svg"` or
+  `backdrop Name from "file.png"`. Also rejected with an error.
 
 Defaults:
 
-- Sprite costumes default to a `48 x 48` canvas.
-- Stage backdrops default to a `480 x 360` canvas.
-- Rotation center defaults to the canvas center.
-- A sprite with **no costume section** gets a default blue dot costume.
-- A Stage with no backdrop gets a default white backdrop.
-- A costume section that is declared but left **empty** (no shapes, no
-  `from "..."`) also falls back to a visible default placeholder — and the
-  Problems panel warns you so it is never silently invisible.
-
-So you have three ways to give a sprite an image: draw it with shape lines,
-reference an uploaded file with `from "file.svg"` (see the next section), or
-omit the costume entirely to use the default.
-
-## External SVG And PNG Assets
-
-You can reference image files instead of drawing the costume in text.
-
-```text
-stage
-    backdrop City from "assets/city.svg"
-    backdrop Sky from "assets/sky.png"
-
-sprite Player
-    costume Idle from "assets/player_idle.svg"
-    costume Run from "assets/player_run.png"
-```
-
-Rules:
-
-- Supported formats are `svg`, `png`, `jpg`, `jpeg`, `bmp`, and `gif`.
-- SVG and PNG are the most tested.
-- Paths are resolved relative to the page location.
-- Missing assets produce a build error instead of silently falling back.
-- Referenced assets are hashed and written into the `.sb3` zip as
-  `<md5>.<ext>`.
-
-For reliable local external assets, run a static server from the project root:
-
-```bash
-python3 -m http.server 8000
-```
-
-Then use paths like:
-
-```text
-costume Idle from "assets/player_idle.svg"
-```
+- A sprite with **no `costume` line** gets a default placeholder costume.
+- A Stage with no `backdrop` gets a default backdrop.
+- A `costume`/`backdrop` you name is exported as that placeholder until you
+  replace its artwork in Scratch.
 
 ## Scripts And Blocks
 
@@ -595,15 +529,15 @@ can read and edit an existing project as text.
 
 - Scripts, custom blocks (`define`), variables, lists, and broadcasts are
   recovered.
-- Costumes and backdrops are referenced as `costume Name from "<id>.svg"`. The
-  original image bytes are kept in memory, so when you click `Download .sb3`
-  again the artwork is written back out unchanged.
+- Costumes and backdrops come back as **names only** (`costume Name`). Because
+  this build cannot import images, the original artwork is **not** carried over
+  — if you re-export, the costumes are placeholders again and you re-add the art
+  in Scratch.
 - Blocks this build does not know are emitted as a `// unknown: <opcode>`
   comment instead of being dropped silently.
 
-Costumes that were originally drawn with the text shape DSL (`canvas`,
-`circle`, …) come back as a bare `costume Name`; re-draw them if you need the
-artwork.
+So loading a `.sb3` is for reading and editing its **scripts and structure** as
+text, not for round-tripping its artwork.
 
 ## Export Details
 
@@ -664,13 +598,12 @@ if <mouse down?> then
 end
 ```
 
-`Asset not found`
+`... is disabled in this build`
 
-A `from "..."` path could not be loaded. Check that:
-
-- The file exists.
-- The path is relative to `index.html`.
-- You are using a local server if your browser blocks `file://` asset fetches.
+You tried to draw a costume with shape lines (`canvas`, `circle`, `rect`, …) or
+import one with `from "..."`. This build does neither — write just
+`costume Name` / `backdrop Name` and add the artwork in Scratch after importing
+the `.sb3`.
 
 Preview looks odd, but Problems says no errors
 
@@ -685,16 +618,19 @@ the full picture of what works, what is limited, and what is planned.
 
 Currently missing or limited:
 
+- **Creating or importing artwork.** By design, this build authors logic and
+  structure only: costumes/backdrops are named placeholders, and you draw or
+  upload the real images in Scratch after importing the `.sb3`. Drawing in text
+  (`canvas`/`circle`/`rect`/…) and image import (`from "..."`) are rejected.
 - Importing sound assets (sound blocks exist but no audio can be bundled), and
   the two sound-effect blocks (`change/set [pitch v] effect`).
 - Running the project inside the editor (export to Scratch/TurboWarp to run).
 - Some Scratch extensions such as Translate, Video Sensing, and
   Text-to-Speech. (Pen and Music are supported.)
-- A visual costume editor and importing image assets by drag-and-drop.
 - Block comments.
-- Decompiling a `.sb3` recovers scripts, structure, and imported artwork, but
-  costumes that were originally authored with the shape DSL come back as a
-  bare `costume Name` (their drawn shapes are not recovered).
+- Decompiling a `.sb3` recovers scripts, structure, variables, lists, and
+  broadcasts, but costumes come back as a bare `costume Name` (artwork is not
+  carried over).
 
 The best way to check current block support is the `Supported blocks` panel in
 the editor.

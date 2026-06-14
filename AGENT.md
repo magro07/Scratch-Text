@@ -11,6 +11,12 @@ technical handoff for future agents. Read it before editing.
 
 ## 1. What it does today
 
+> **Scope note (this build):** the editor authors a project's *logic and
+> structure* only. It does **not** create or import artwork — costumes and
+> backdrops are named placeholders, and the user draws/uploads the real images
+> in Scratch after importing the `.sb3`. The costume drawing DSL and `from "..."`
+> imports shown in some examples below are **disabled** (see § 4.5).
+
 **Input** — plaintext in scratchblocks-style syntax. A file can contain one
 default sprite, explicit `stage` / `character` / `sprite` sections, Stage
 backdrops, sprite costumes, and scripts on either the Stage or sprites:
@@ -350,7 +356,17 @@ same-named global never collide), so the same source produces the same IDs
 across compiles. The decompiler re-emits each sprite-local as a
 `local variable [name]` / `local list [name]` line.
 
-### 4.5  Costume design syntax
+### 4.5  Costume design syntax — DISABLED in this build
+
+> **This build cannot create or import artwork.** `parseCostumeLike` in
+> `src/parser.js` now rejects both the drawing DSL below and `from "..."`
+> imports with an error, so a `costume`/`backdrop` is only a *named
+> placeholder*; the user adds the real image in Scratch after importing the
+> `.sb3`. The shape-rendering machinery (`addCostumeShape`, `validateCostume`,
+> `renderCostumeSvg`, the asset fetch in `sb3.js`) is **retained but
+> unreachable**. To re-enable artwork, remove the two `errors.push(...)` guards
+> in `parseCostumeLike` and restore the shape-collecting loop. The rest of this
+> section documents that (currently dormant) machinery.
 
 A `costume Name` section under a character defines a vector SVG costume for
 that sprite:

@@ -33,8 +33,6 @@ function finish() {
     const src = [
       'sprite Player',
       '    costume Face',
-      '        canvas (64) (64)',
-      '        circle (32) (32) (28) [#ffcc66 c]',
       '    when flag clicked',
       '        say [Hello!] for (2) seconds',
       '        move (10) steps',
@@ -58,11 +56,13 @@ function finish() {
     check('costume asset stored', Object.keys(assets).length >= 1, JSON.stringify(Object.keys(assets)));
 
     const text = DECOMPILE.decompile(projectJson);
-    check('decompile references costume by md5ext',
-          /costume Face from "[0-9a-f]{32}\.svg"/.test(text), '\n' + text);
+    // This build can't import artwork, so costumes decompile to a bare name
+    // with no `from "..."` reference; the user re-adds the image in Scratch.
+    check('decompile emits costume by name without `from` import',
+          /costume Face/.test(text) && !/from "/.test(text), '\n' + text);
     check('decompile has the script', text.indexOf('say [Hello!] for (2) seconds') >= 0, '\n' + text);
 
-    // Reparse the decompiled text; the `from` path resolves via the asset store.
+    // Reparse the decompiled text; bare costume names parse cleanly.
     const re = PARSER.parseProgram(text);
     check('reparse no errors', re.errors.length === 0, JSON.stringify(re.errors) + '\n' + text);
 
@@ -72,9 +72,8 @@ function finish() {
     const json2 = JSON.parse(await zip2.file('project.json').async('string'));
     const player = json2.targets.find(t => t.name === 'Player');
     check('re-exported sprite present', !!player);
-    check('re-exported costume keeps original art',
-          player && player.costumes[0] && player.costumes[0].name === 'Face' &&
-          assets[player.costumes[0].md5ext] !== undefined,
+    check('re-exported costume round-trips by name',
+          player && player.costumes[0] && player.costumes[0].name === 'Face',
           JSON.stringify(player && player.costumes));
 
     finish();

@@ -1,8 +1,9 @@
 // Reverse direction: walk a Scratch 3 project.json and emit Scratch Text that
 // parses back (via parser.js) into an equivalent project. This is the inverse
 // of compile.js. Costume *artwork* cannot be turned back into the shape DSL
-// (the shapes are gone once rendered to SVG), so costumes are emitted by name
-// and, when an imported asset is available, as `from "<md5ext>"` references.
+// (the shapes are gone once rendered to SVG). This build also cannot import
+// images, so costumes are emitted by name only — the user re-adds the artwork
+// in Scratch after loading the project.
 //
 // See AGENT.md § 8.3. Unknown opcodes degrade to a `// unknown: <opcode>`
 // comment instead of crashing.
@@ -288,8 +289,9 @@ function decompiler(project) {
       : (target._scratchTextCostumes || []);
     for (const c of list) {
       const name = c.name || (keyword + '1');
-      const ref = c.md5ext || c.path;
-      lines.push(ref ? `${keyword} ${name} from "${ref}"` : `${keyword} ${name}`);
+      // This build can't import artwork, so costumes decompile to a bare name
+      // (the user re-adds the image in Scratch); we never emit `from "..."`.
+      lines.push(`${keyword} ${name}`);
     }
   }
 

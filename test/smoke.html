@@ -417,40 +417,46 @@ try {
         playSound && soundProject.targets[1].blocks[playSound.inputs.SOUND_MENU[1]].opcode === 'sound_sounds_menu',
         JSON.stringify(playSound && playSound.inputs.SOUND_MENU));
 
-  // ---- Costume coordinate validation (warnings, not hard errors) ----
-  const badCostume = PARSER.parseProgram([
-    'sprite H',
-    '    costume F',
-    '        canvas (100) (100)',
-    '        circle (0) (0) (20) [#ff0000 c]',
-    '        circle (-30) (10) (10) [#00ff00 c]',
-  ].join('\n'));
-  check('costume validation warns on off-canvas/negative coords',
-        badCostume.warnings && badCostume.warnings.length >= 1, JSON.stringify(badCostume.warnings));
-  check('costume validation keeps these as warnings, not errors', badCostume.errors.length === 0,
-        JSON.stringify(badCostume.errors));
-  check('costume warning mentions the coordinate system',
-        badCostume.warnings.some(w => /top-left/i.test(w.msg)));
-  const goodCostume = PARSER.parseProgram([
+  // ---- Drawing and importing artwork is disabled in this build ----
+  // A costume/backdrop is only a named placeholder; the user adds the real
+  // image in Scratch. Both the drawing DSL and `from "..."` are rejected.
+  const drawnCostume = PARSER.parseProgram([
     'sprite H',
     '    costume F',
     '        canvas (100) (100)',
     '        circle (50) (50) (20) [#ff0000 c]',
   ].join('\n'));
-  check('costume validation quiet on valid coords', goodCostume.warnings.length === 0,
-        JSON.stringify(goodCostume.warnings));
+  check('drawing a costume in text is rejected',
+        drawnCostume.errors.some(e => /disabled in this build/i.test(e.msg)),
+        JSON.stringify(drawnCostume.errors));
+  const importedCostume = PARSER.parseProgram([
+    'sprite H',
+    '    costume F from "art/hero.svg"',
+  ].join('\n'));
+  check('importing a costume image is rejected',
+        importedCostume.errors.some(e => /disabled in this build/i.test(e.msg)),
+        JSON.stringify(importedCostume.errors));
+  const drawnBackdrop = PARSER.parseProgram([
+    'stage',
+    '    backdrop Sky',
+    '        canvas (480) (360)',
+    '        rect (0) (0) (480) (360) [#88ccff c]',
+  ].join('\n'));
+  check('drawing a backdrop in text is rejected',
+        drawnBackdrop.errors.some(e => /disabled in this build/i.test(e.msg)),
+        JSON.stringify(drawnBackdrop.errors));
+  // A bare costume name is fine and yields a default placeholder image.
   const emptyCostume = PARSER.parseProgram([
     'sprite H',
     '    costume F',
     '    when flag clicked',
     '        say [hi]',
   ].join('\n'));
-  check('costume validation warns on empty costume (uses default placeholder)',
-        emptyCostume.warnings.some(w => /placeholder/i.test(w.msg)), JSON.stringify(emptyCostume.warnings));
-  // An empty text costume falls back to visible default art, not a blank SVG.
+  check('bare costume name parses without errors', emptyCostume.errors.length === 0,
+        JSON.stringify(emptyCostume.errors));
   const emptyProject = COMPILE.compile(emptyCostume.program);
   const emptyArt = emptyProject.targets[1]._scratchTextCostumes[0];
-  check('empty costume renders a visible default placeholder',
+  check('bare costume renders a visible default placeholder',
         emptyArt && /<circle/.test(emptyArt.svg) && emptyArt.name === 'F', emptyArt && emptyArt.svg);
 
   // ---- Variable/list monitors are emitted (hidden) ----
@@ -470,10 +476,6 @@ try {
     'when flag clicked',
     'say [>> go fast <<]',
     'say [a > b and (c)]',
-    'sprite Hero',
-    '    costume Title',
-    '        canvas (100) (40)',
-    '        text [<< PRESS START >>] (50) (20) (10) [#ffffff c]',
   ].join('\n'));
   check('opaque labels parse without errors', punct.errors.length === 0, JSON.stringify(punct.errors));
   check('opaque label keeps < > literally',
@@ -483,11 +485,6 @@ try {
   const multiSpriteSample = [
     'character Cat',
     '    costume CatFace',
-    '        canvas (64) (64)',
-    '        circle (32) (32) (28) [#ffcc66 c]',
-    '        circle (22) (25) (4) [#000000 c]',
-    '        circle (42) (25) (4) [#000000 c]',
-    '        line (22) (43) (42) (43) [#000000 c] (3)',
     '    when flag clicked',
     '        say [cat flag]',
     '    when [space v] key pressed',
@@ -510,9 +507,9 @@ try {
   check('multi-sprite AST groups repeated character',
         multi.program.sprites.length === 2 && catAst && catAst.scripts.length === 3 && dogAst && dogAst.scripts.length === 1,
         JSON.stringify(multi.program.sprites.map(s => [s.name, s.scripts.length])));
-  check('costume AST parsed',
+  check('costume AST parsed (bare placeholder, no shapes)',
         catAst && catAst.costumes.length === 1 && catAst.costumes[0].name === 'CatFace' &&
-        catAst.costumes[0].shapes.length === 4,
+        catAst.costumes[0].shapes.length === 0,
         JSON.stringify(catAst && catAst.costumes));
   const multiProject = COMPILE.compile(multi.program);
   const catTarget = multiProject.targets.find(t => t.name === 'Cat');
@@ -527,21 +524,17 @@ try {
         `${catTarget.x},${dogTarget.x}`);
   check('multi-sprite shared broadcast',
         Object.values(multiProject.targets[0].broadcasts).indexOf('woof') >= 0);
-  check('designed costume compiled',
+  check('placeholder costume compiled',
         catTarget._scratchTextCostumes && catTarget._scratchTextCostumes.length === 1 &&
-        /<circle/.test(catTarget._scratchTextCostumes[0].svg) &&
-        catTarget._scratchTextCostumes[0].rotationCenterX === 32);
+        catTarget._scratchTextCostumes[0].name === 'CatFace' &&
+        /<circle/.test(catTarget._scratchTextCostumes[0].svg));
   check('designed costume not in json',
         JSON.stringify(multiProject).indexOf('_scratchTextCostumes') < 0);
 
   const stageSample = [
     'stage',
     '    backdrop Sky',
-    '        canvas (480) (360)',
-    '        rect (0) (0) (480) (360) [#88ccff c]',
     '    backdrop Night',
-    '        canvas (480) (360)',
-    '        rect (0) (0) (480) (360) [#111133 c]',
     '    current backdrop [Night v]',
     '    when green flag clicked',
     '        switch backdrop to [Sky v]',
@@ -550,8 +543,6 @@ try {
     '',
     'character Player',
     '    costume Idle',
-    '        canvas (64) (64)',
-    '        circle (32) (32) (28) [#ffcc66 c]',
     '    position x: (0) y: (-100)',
     '    size (90)',
     '    direction (45)',
@@ -561,8 +552,6 @@ try {
     '',
     'sprite Enemy',
     '    costume Default',
-    '        canvas (32) (32)',
-    '        rect (0) (0) (32) (32) [#ff3333 c]',
     '    visible false',
     '    when flag clicked',
     '        show',

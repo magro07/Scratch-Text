@@ -1023,33 +1023,51 @@ function parseProgram(source) {
   function parseCostumeLike(line, isBackdrop) {
     const header = isBackdrop ? parseBackdropHeader(line.text) : parseCostumeHeader(line.text);
     const owner = isBackdrop ? stage : currentTarget;
-    const size = defaultCostumeSize(isBackdrop || owner === stage);
+    const isStageCostume = isBackdrop || owner === stage;
+    const size = defaultCostumeSize(isStageCostume);
+    const keyword = isStageCostume ? 'backdrop' : 'costume';
+    const kind = isStageCostume ? 'Backdrop' : 'Costume';
     const costume = {
-      name: header.name || `${isBackdrop || owner === stage ? 'backdrop' : 'costume'}${(isBackdrop || owner === stage ? stage.backdrops : owner.costumes).length + 1}`,
+      name: header.name || `${keyword}${(isStageCostume ? stage.backdrops : owner.costumes).length + 1}`,
       width: size.width,
       height: size.height,
       centerX: size.centerX,
       centerY: size.centerY,
       shapes: [],
     };
-    if (header.sourcePath) costume.sourcePath = header.sourcePath;
     costume._line = line.no;
+
+    // This build cannot create or import artwork. A costume/backdrop is only a
+    // named placeholder; the actual image must be added by hand in Scratch after
+    // importing the .sb3. So `from "..."` imports and the drawing DSL (canvas,
+    // circle, rect, ...) are rejected here rather than silently accepted.
+    if (header.sourcePath) {
+      errors.push({ line: line.no, msg:
+        `Importing images with \`from "..."\` is disabled in this build. ` +
+        `Write just \`${keyword} ${costume.name}\` and add the ${kind.toLowerCase()} ` +
+        `artwork yourself in Scratch after importing the .sb3.` });
+    }
+
     const costumeIndent = line.indent;
     idx++;
+    let sawDrawing = false;
     while (idx < lines.length) {
       const shapeLine = lines[idx];
       if (shapeLine.indent <= costumeIndent) break;
       if (parseStageHeader(shapeLine.text) || parseSpriteHeader(shapeLine.text) ||
           parseCostumeHeader(shapeLine.text) || parseBackdropHeader(shapeLine.text) ||
           looksLikeTargetProperty(shapeLine.text)) break;
-      const before = costume.shapes.length;
-      addCostumeShape(costume, shapeLine, errors);
-      for (let k = before; k < costume.shapes.length; k++) costume.shapes[k]._line = shapeLine.no;
+      sawDrawing = true; // a drawing-DSL line (canvas/circle/rect/...) — disabled
       idx++;
     }
-    const kind = (isBackdrop || owner === stage) ? 'Backdrop' : 'Costume';
-    validateCostume(costume, kind, warnings);
-    if (isBackdrop || owner === stage) stage.backdrops.push(costume);
+    if (sawDrawing) {
+      errors.push({ line: costume._line, msg:
+        `Drawing ${kind.toLowerCase()}s in text (canvas, circle, rect, ...) is disabled ` +
+        `in this build. Write just \`${keyword} ${costume.name}\` and add the artwork ` +
+        `yourself in Scratch after importing the .sb3.` });
+    }
+
+    if (isStageCostume) stage.backdrops.push(costume);
     else owner.costumes.push(costume);
   }
 
