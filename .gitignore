@@ -1,0 +1,19 @@
+# Scratch game projects authored with the editor — not part of the engine
+Scratch-Projekte/
+
+# Local build artifacts, screenshots, generated .sb3/.txt, scratch test tooling
+_build/
+
+# Temporary / scratch test files
+test/_tmp_build2.html
+
+# Editor/agent markers
+.codex
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.vscode/
+.idea/

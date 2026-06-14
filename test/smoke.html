@@ -1,0 +1,667 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Smoke test</title>
+<style>body { font-family: monospace; font-size: 11px; white-space: pre; padding: 8px; }
+.ok { color: #060; } .bad { color: #c00; }</style>
+</head>
+<body>
+<div id="out">running...</div>
+
+<script src="../src/md5.js"></script>
+<script src="../src/blocks.js"></script>
+<script src="../src/parser.js"></script>
+<script src="../src/compile.js"></script>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let pass = 0, fail = 0;
+function log(msg) { lines.push(msg); }
+function check(name, cond, detail) {
+  if (cond) { pass++; log('PASS ' + name + (detail ? ' ' + detail : '')); }
+  else      { fail++; log('FAIL ' + name + (detail ? ' ' + detail : '')); }
+}
+
+try {
+  // ---- MD5 sanity ----
+  check('md5("")', MD5.md5Str('') === 'd41d8cd98f00b204e9800998ecf8427e', MD5.md5Str(''));
+  check('md5("abc")', MD5.md5Str('abc') === '900150983cd24fb0d6963f7d28e17f72', MD5.md5Str('abc'));
+  check('md5(fox)', MD5.md5Str('The quick brown fox jumps over the lazy dog')
+        === '9e107d9d372bb6826bd81d3542a419d6',
+        MD5.md5Str('The quick brown fox jumps over the lazy dog'));
+
+  // ---- Parser sample ----
+  const sample = [
+    'when flag clicked',
+    'say [Hello, Scratch Text!] for (2) seconds',
+    'set [score v] to (0)',
+    'forever',
+    '    move (10) steps',
+    '    if on edge, bounce',
+    '    change [score v] by (1)',
+    '    if <(score) > (20)> then',
+    '        say [Twenty points!] for (1) seconds',
+    '    end',
+    'end',
+    '',
+    'when [space v] key pressed',
+    'turn cw (15) degrees',
+  ].join('\n');
+
+  const { program, errors } = PARSER.parseProgram(sample);
+  check('parse errors', errors.length === 0, 'errors=' + JSON.stringify(errors));
+  check('scripts count', program.scripts.length === 2, 'got ' + program.scripts.length);
+  check('default sprite section', program.sprites.length === 1 && program.sprites[0].name === 'Sprite1');
+  check('variable declared', program.variables.has('score'));
+
+  // First script should have a flag hat and some body.
+  const s1 = program.scripts[0];
+  check('script1 has flag hat', s1.hat && s1.hat.template.opcode === 'event_whenflagclicked');
+  check('script1 body len', s1.body.length === 3, 'got ' + s1.body.length);  // say, set, forever
+  check('forever is c-block', s1.body[2].template.shape === 'c');
+  check('forever contains 4 stmts', s1.body[2].substack && s1.body[2].substack.length === 4,
+        'got ' + (s1.body[2].substack && s1.body[2].substack.length));
+  const ifNode = s1.body[2].substack[3];
+  check('nested if', ifNode.template.opcode === 'control_if');
+  check('if condition is bool',
+        ifNode.args[0] && ifNode.args[0].kind === 'boolean' && ifNode.args[0].template.opcode === 'operator_gt');
+
+  // Second script: key hat.
+  const s2 = program.scripts[1];
+  check('script2 has key hat', s2.hat && s2.hat.template.opcode === 'event_whenkeypressed');
+  check('script2 key field', s2.hat.args[0] && s2.hat.args[0].value === 'space');
+
+  // ---- Compile ----
+  const project = COMPILE.compile(program);
+  const stage = project.targets[0];
+  const sprite = project.targets[1];
+  check('stage is stage', stage.isStage === true);
+  check('sprite is not stage', sprite.isStage === false);
+  check('stage has score variable', Object.values(stage.variables).some(v => v[0] === 'score'));
+  check('sprite has blocks', Object.keys(sprite.blocks).length >= 10,
+        'n=' + Object.keys(sprite.blocks).length);
+  // Every top-level block must have topLevel:true and no parent.
+  for (const id of Object.keys(sprite.blocks)) {
+    const b = sprite.blocks[id];
+    if (b.topLevel) check('toplevel '+b.opcode+' has no parent', b.parent === null);
+  }
+  // Exactly 2 top-level blocks (two hats).
+  const topLevel = Object.values(sprite.blocks).filter(b => b.topLevel);
+  check('exactly 2 top-level blocks', topLevel.length === 2, 'got ' + topLevel.length);
+
+  // Forever's SUBSTACK must reference a real block.
+  const forever = Object.values(sprite.blocks).find(b => b.opcode === 'control_forever');
+  check('forever exists', !!forever);
+  if (forever) {
+    const sub = forever.inputs.SUBSTACK;
+    check('forever SUBSTACK shape', Array.isArray(sub) && sub[0] === 2 && !!sprite.blocks[sub[1]]);
+  }
+
+  // if block references operator_gt block.
+  const ifBlock = Object.values(sprite.blocks).find(b => b.opcode === 'control_if');
+  check('control_if exists', !!ifBlock);
+  if (ifBlock) {
+    const cond = ifBlock.inputs.CONDITION;
+    check('if CONDITION shape', Array.isArray(cond) && cond[0] === 2 && !!sprite.blocks[cond[1]]);
+    check('if CONDITION is gt', sprite.blocks[cond[1]].opcode === 'operator_gt');
+  }
+
+  // data_setvariableto VALUE must be text-shadow (type 10).
+  const setVar = Object.values(sprite.blocks).find(b => b.opcode === 'data_setvariableto');
+  check('setvar exists', !!setVar);
+  if (setVar) {
+    const val = setVar.inputs.VALUE;
+    check('setvar VALUE shadow type', Array.isArray(val) && val[0] === 1 && Array.isArray(val[1]) && val[1][0] === 10,
+          'got ' + JSON.stringify(val));
+    check('setvar VARIABLE field', setVar.fields.VARIABLE && setVar.fields.VARIABLE[0] === 'score');
+  }
+
+  // data_changevariableby VALUE uses number shadow (type 4).
+  const chgVar = Object.values(sprite.blocks).find(b => b.opcode === 'data_changevariableby');
+  check('changevar exists', !!chgVar);
+  if (chgVar) {
+    const val = chgVar.inputs.VALUE;
+    check('changevar VALUE shadow type', Array.isArray(val) && val[0] === 1 && Array.isArray(val[1]) && val[1][0] === 4,
+          'got ' + JSON.stringify(val));
+  }
+
+  // operator_gt has variable reporter on OPERAND1.
+  const gt = Object.values(sprite.blocks).find(b => b.opcode === 'operator_gt');
+  check('gt exists', !!gt);
+  if (gt) {
+    const o1 = gt.inputs.OPERAND1;
+    check('gt OPERAND1 uses variable primitive',
+          Array.isArray(o1) && o1[0] === 3 && Array.isArray(o1[1]) && o1[1][0] === 12 && o1[1][1] === 'score',
+          'got ' + JSON.stringify(o1));
+    const o2 = gt.inputs.OPERAND2;
+    check('gt OPERAND2 is literal 20',
+          Array.isArray(o2) && o2[0] === 1 && o2[1][1] === '20',
+          'got ' + JSON.stringify(o2));
+  }
+
+  // event_whenkeypressed has KEY_OPTION as a direct field.
+  const keyHat = Object.values(sprite.blocks).find(b => b.opcode === 'event_whenkeypressed');
+  check('key hat exists', !!keyHat);
+  if (keyHat) {
+    check('key hat KEY_OPTION field', keyHat.fields.KEY_OPTION && keyHat.fields.KEY_OPTION[0] === 'space');
+  }
+
+  // ---- Expanded core block coverage ----
+  const templateCount = BLOCKS.HATS.length + BLOCKS.STACKS.length + BLOCKS.C_BLOCKS.length +
+    BLOCKS.REPORTERS.length + BLOCKS.BOOLEANS.length;
+  check('expanded template count', templateCount >= 100, 'n=' + templateCount);
+
+  const extendedSample = [
+    'when flag clicked',
+    'go to [mouse-pointer v]',
+    'glide (1) secs to [random position v]',
+    'point towards [mouse-pointer v]',
+    'set rotation style [left-right v]',
+    'switch costume to [costume1 v]',
+    'switch backdrop to [backdrop1 v]',
+    'switch backdrop to [next backdrop v] and wait',
+    'next backdrop',
+    'previous backdrop',
+    'change [ghost v] effect by (10)',
+    'set [color v] effect to (25)',
+    'clear graphic effects',
+    'go to [front v] layer',
+    'go [backward v] (2) layers',
+    'broadcast [start v]',
+    'broadcast [done v] and wait',
+    'add [apple] to [items v]',
+    'delete [last v] of [items v]',
+    'delete all of [items v]',
+    'insert [pear] at (1) of [items v]',
+    'replace item (1) of [items v] with [banana]',
+    'say (item (1) of [items v])',
+    'say (item # of [banana] in [items v])',
+    'say (length of [items v])',
+    'say (letter (1) of [apple])',
+    'say (length of [apple])',
+    'say ([abs v] of (-3))',
+    'say (distance to [mouse-pointer v])',
+    'say (costume [number v])',
+    'say (backdrop [name v])',
+    'say ([x position v] of [Stage v])',
+    'if <[items v] contains [banana] ?> then',
+    '    say [has banana]',
+    'end',
+    'if <[apple] contains [a] ?> then',
+    '    say [contains a]',
+    'end',
+    'if <touching [mouse-pointer v]?> then',
+    '    say [touching pointer]',
+    'end',
+    'if <touching color [#ff0000 c]?> then',
+    '    say [touching red]',
+    'end',
+    'if <color [#ff0000 c] is touching [#00ff00 c]?> then',
+    '    say [red on green]',
+    'end',
+    'create clone of [myself v]',
+    '',
+    'when I receive [start v]',
+    'say (username)',
+    'say (loudness)',
+    'say (days since 2000)',
+    '',
+    'when backdrop switches to [backdrop1 v]',
+    'say [backdrop changed]',
+    '',
+    'when I start as a clone',
+    'delete this clone',
+  ].join('\n');
+
+  const ext = PARSER.parseProgram(extendedSample);
+  check('extended no parse errors', ext.errors.length === 0, JSON.stringify(ext.errors));
+  check('extended list declared', ext.program.lists.has('items'));
+  check('extended broadcasts declared', ext.program.broadcasts.has('start') && ext.program.broadcasts.has('done'));
+
+  const extProject = COMPILE.compile(ext.program);
+  const extStage = extProject.targets[0];
+  const extSprite = extProject.targets[1];
+  const extBlocks = Object.values(extSprite.blocks);
+  const byOpcode = opcode => extBlocks.find(b => b.opcode === opcode);
+  const allByOpcode = opcode => extBlocks.filter(b => b.opcode === opcode);
+  const shadowField = (owner, inputName, fieldName) => {
+    const input = owner && owner.inputs[inputName];
+    if (!Array.isArray(input) || typeof input[1] !== 'string') return null;
+    const shadow = extSprite.blocks[input[1]];
+    return shadow && shadow.fields[fieldName || inputName];
+  };
+
+  check('extended stage has list', Object.values(extStage.lists).some(v => v[0] === 'items'));
+  check('extended stage has broadcasts',
+        Object.values(extStage.broadcasts).indexOf('start') >= 0 && Object.values(extStage.broadcasts).indexOf('done') >= 0);
+
+  const gotoBlock = byOpcode('motion_goto');
+  check('motion_goto menu normalized',
+        shadowField(gotoBlock, 'TO') && shadowField(gotoBlock, 'TO')[0] === '_mouse_',
+        JSON.stringify(gotoBlock && gotoBlock.inputs.TO));
+  const glideTo = byOpcode('motion_glideto');
+  check('motion_glideto menu normalized',
+        shadowField(glideTo, 'TO') && shadowField(glideTo, 'TO')[0] === '_random_',
+        JSON.stringify(glideTo && glideTo.inputs.TO));
+  const pointTowards = byOpcode('motion_pointtowards');
+  check('point towards menu normalized',
+        shadowField(pointTowards, 'TOWARDS') && shadowField(pointTowards, 'TOWARDS')[0] === '_mouse_');
+
+  const broadcastBlock = byOpcode('event_broadcast');
+  check('broadcast primitive input',
+        broadcastBlock && broadcastBlock.inputs.BROADCAST_INPUT &&
+        broadcastBlock.inputs.BROADCAST_INPUT[1][0] === 11 &&
+        broadcastBlock.inputs.BROADCAST_INPUT[1][1] === 'start',
+        JSON.stringify(broadcastBlock && broadcastBlock.inputs.BROADCAST_INPUT));
+  const receiveHat = byOpcode('event_whenbroadcastreceived');
+  check('receive broadcast field',
+        receiveHat && receiveHat.fields.BROADCAST_OPTION &&
+        receiveHat.fields.BROADCAST_OPTION[0] === 'start' &&
+        !!extStage.broadcasts[receiveHat.fields.BROADCAST_OPTION[1]]);
+
+  const addList = byOpcode('data_addtolist');
+  check('list field registered',
+        addList && addList.fields.LIST && addList.fields.LIST[0] === 'items' && !!extStage.lists[addList.fields.LIST[1]]);
+  const deleteList = byOpcode('data_deleteoflist');
+  check('list index positive shadow',
+        deleteList && deleteList.inputs.INDEX && deleteList.inputs.INDEX[1][0] === 5 &&
+        deleteList.inputs.INDEX[1][1] === 'last',
+        JSON.stringify(deleteList && deleteList.inputs.INDEX));
+  check('list reporters present',
+        byOpcode('data_itemoflist') && byOpcode('data_itemnumoflist') && byOpcode('data_lengthoflist'));
+  check('list contains boolean present', !!byOpcode('data_listcontainsitem'));
+
+  const touchObject = byOpcode('sensing_touchingobject');
+  check('touching object menu normalized',
+        shadowField(touchObject, 'TOUCHINGOBJECTMENU') &&
+        shadowField(touchObject, 'TOUCHINGOBJECTMENU')[0] === '_mouse_');
+  const touchColor = byOpcode('sensing_touchingcolor');
+  check('touching color primitive',
+        touchColor && touchColor.inputs.COLOR && touchColor.inputs.COLOR[1][0] === 9 &&
+        touchColor.inputs.COLOR[1][1] === '#ff0000',
+        JSON.stringify(touchColor && touchColor.inputs.COLOR));
+  const colorTouching = byOpcode('sensing_coloristouchingcolor');
+  check('color touching color primitive',
+        colorTouching && colorTouching.inputs.COLOR2 && colorTouching.inputs.COLOR2[1][0] === 9 &&
+        colorTouching.inputs.COLOR2[1][1] === '#00ff00');
+
+  const sensingOf = byOpcode('sensing_of');
+  check('sensing of stage normalized',
+        sensingOf && sensingOf.fields.PROPERTY && sensingOf.fields.PROPERTY[0] === 'x position' &&
+        shadowField(sensingOf, 'OBJECT') && shadowField(sensingOf, 'OBJECT')[0] === '_stage_');
+  check('operator reporters present',
+        byOpcode('operator_letter_of') && byOpcode('operator_length') && byOpcode('operator_mathop') &&
+        byOpcode('operator_contains'));
+  check('looks reporters present',
+        byOpcode('looks_costumenumbername') && byOpcode('looks_backdropnumbername'));
+  const cloneBlock = byOpcode('control_create_clone_of');
+  check('clone menu normalized',
+        shadowField(cloneBlock, 'CLONE_OPTION') && shadowField(cloneBlock, 'CLONE_OPTION')[0] === '_myself_');
+  check('clone hat and delete present',
+        byOpcode('control_start_as_clone') && byOpcode('control_delete_this_clone'));
+  check('looks switch backdrop variants',
+        byOpcode('looks_nextbackdrop') && allByOpcode('looks_switchbackdropto').length >= 2 &&
+        byOpcode('looks_switchbackdroptoandwait'));
+
+  const penSample = [
+    'when flag clicked',
+    'erase all',
+    'stamp',
+    'pen down',
+    'set pen color to [#00ff00 c]',
+    'change pen [color v] by (10)',
+    'set pen [saturation v] to (75)',
+    'change pen size by (2)',
+    'set pen size to (5)',
+    'change pen color by (3)',
+    'set pen color to (20)',
+    'change pen shade by (4)',
+    'set pen shade to (60)',
+    'pen up',
+  ].join('\n');
+
+  const pen = PARSER.parseProgram(penSample);
+  check('pen no parse errors', pen.errors.length === 0, JSON.stringify(pen.errors));
+  const penProject = COMPILE.compile(pen.program);
+  const penBlocks = Object.values(penProject.targets[1].blocks);
+  const penByOpcode = opcode => penBlocks.find(b => b.opcode === opcode);
+  check('pen extension exported', penProject.extensions.indexOf('pen') >= 0, JSON.stringify(penProject.extensions));
+  check('pen core blocks present',
+        penByOpcode('pen_clear') && penByOpcode('pen_stamp') &&
+        penByOpcode('pen_penDown') && penByOpcode('pen_penUp'));
+  const penColor = penByOpcode('pen_setPenColorToColor');
+  check('pen color primitive',
+        penColor && penColor.inputs.COLOR && penColor.inputs.COLOR[1][0] === 9 &&
+        penColor.inputs.COLOR[1][1] === '#00ff00',
+        JSON.stringify(penColor && penColor.inputs.COLOR));
+  const penParam = penByOpcode('pen_setPenColorParamTo');
+  check('pen param field',
+        penParam && penParam.fields.COLOR_PARAM && penParam.fields.COLOR_PARAM[0] === 'saturation');
+  check('pen size blocks present',
+        penByOpcode('pen_changePenSizeBy') && penByOpcode('pen_setPenSizeTo'));
+  check('legacy pen blocks present',
+        penByOpcode('pen_changePenHueBy') && penByOpcode('pen_setPenHueToNumber') &&
+        penByOpcode('pen_changePenShadeBy') && penByOpcode('pen_setPenShadeToNumber'));
+
+  // ---- Music extension ----
+  const musicSample = [
+    'when flag clicked',
+    'set instrument to [2 v]',
+    'set tempo to (120)',
+    'change tempo by (20)',
+    'play drum [3 v] for (0.25) beats',
+    'rest for (0.5) beats',
+    'play note (60) for (0.25) beats',
+    'say (tempo)',
+  ].join('\n');
+  const music = PARSER.parseProgram(musicSample);
+  check('music no parse errors', music.errors.length === 0, JSON.stringify(music.errors));
+  const musicProject = COMPILE.compile(music.program);
+  const musicBlocks = Object.values(musicProject.targets[1].blocks);
+  const musicByOpcode = opcode => musicBlocks.find(b => b.opcode === opcode);
+  check('music extension exported', musicProject.extensions.indexOf('music') >= 0,
+        JSON.stringify(musicProject.extensions));
+  check('music core blocks present',
+        musicByOpcode('music_setInstrument') && musicByOpcode('music_setTempo') &&
+        musicByOpcode('music_changeTempo') && musicByOpcode('music_playDrumForBeats') &&
+        musicByOpcode('music_restForBeats') && musicByOpcode('music_playNoteForBeats'));
+  const drumBlock = musicByOpcode('music_playDrumForBeats');
+  check('music drum menu shadow',
+        drumBlock && typeof drumBlock.inputs.DRUM[1] === 'string' &&
+        musicProject.targets[1].blocks[drumBlock.inputs.DRUM[1]].opcode === 'music_menu_DRUM' &&
+        musicProject.targets[1].blocks[drumBlock.inputs.DRUM[1]].fields.DRUM[0] === '3',
+        JSON.stringify(drumBlock && drumBlock.inputs.DRUM));
+  const noteBlock = musicByOpcode('music_playNoteForBeats');
+  check('music note is plain number shadow',
+        noteBlock && noteBlock.inputs.NOTE[0] === 1 && noteBlock.inputs.NOTE[1][0] === 4 &&
+        noteBlock.inputs.NOTE[1][1] === '60',
+        JSON.stringify(noteBlock && noteBlock.inputs.NOTE));
+  check('music getTempo reporter present', !!musicByOpcode('music_getTempo'));
+
+  // ---- Sound + remaining single blocks ----
+  const soundSample = [
+    'when [loudness v] > (10)',
+    'say [loud]',
+    '',
+    'when flag clicked',
+    'start sound [Meow v]',
+    'play sound [Pop v] until done',
+    'stop all sounds',
+    'clear sound effects',
+    'set volume to (80)',
+    'change volume by (-5)',
+    'set drag mode [draggable v]',
+    'say (volume)',
+    'say (current [year v])',
+  ].join('\n');
+  const soundParsed = PARSER.parseProgram(soundSample);
+  check('sound/misc no parse errors', soundParsed.errors.length === 0, JSON.stringify(soundParsed.errors));
+  const soundProject = COMPILE.compile(soundParsed.program);
+  const sBlocks = Object.values(soundProject.targets[1].blocks);
+  const sByOpcode = opcode => sBlocks.find(b => b.opcode === opcode);
+  check('sound adds no extension', soundProject.extensions.length === 0, JSON.stringify(soundProject.extensions));
+  check('sound blocks present',
+        sByOpcode('sound_play') && sByOpcode('sound_playuntildone') && sByOpcode('sound_stopallsounds') &&
+        sByOpcode('sound_cleareffects') && sByOpcode('sound_setvolumeto') && sByOpcode('sound_changevolumeby') &&
+        sByOpcode('sound_volume'));
+  const whenGt = sByOpcode('event_whengreaterthan');
+  check('when-greater-than hat',
+        whenGt && whenGt.topLevel && whenGt.fields.WHENGREATERTHANMENU &&
+        whenGt.inputs.VALUE[1][1] === '10',
+        JSON.stringify(whenGt && [whenGt.fields.WHENGREATERTHANMENU, whenGt.inputs.VALUE]));
+  check('set drag mode field', sByOpcode('sensing_setdragmode'));
+  check('current reporter present', !!sByOpcode('sensing_current'));
+  const playSound = sByOpcode('sound_playuntildone');
+  check('sound menu shadow',
+        playSound && soundProject.targets[1].blocks[playSound.inputs.SOUND_MENU[1]].opcode === 'sound_sounds_menu',
+        JSON.stringify(playSound && playSound.inputs.SOUND_MENU));
+
+  // ---- Costume coordinate validation (warnings, not hard errors) ----
+  const badCostume = PARSER.parseProgram([
+    'sprite H',
+    '    costume F',
+    '        canvas (100) (100)',
+    '        circle (0) (0) (20) [#ff0000 c]',
+    '        circle (-30) (10) (10) [#00ff00 c]',
+  ].join('\n'));
+  check('costume validation warns on off-canvas/negative coords',
+        badCostume.warnings && badCostume.warnings.length >= 1, JSON.stringify(badCostume.warnings));
+  check('costume validation keeps these as warnings, not errors', badCostume.errors.length === 0,
+        JSON.stringify(badCostume.errors));
+  check('costume warning mentions the coordinate system',
+        badCostume.warnings.some(w => /top-left/i.test(w.msg)));
+  const goodCostume = PARSER.parseProgram([
+    'sprite H',
+    '    costume F',
+    '        canvas (100) (100)',
+    '        circle (50) (50) (20) [#ff0000 c]',
+  ].join('\n'));
+  check('costume validation quiet on valid coords', goodCostume.warnings.length === 0,
+        JSON.stringify(goodCostume.warnings));
+  const emptyCostume = PARSER.parseProgram([
+    'sprite H',
+    '    costume F',
+    '    when flag clicked',
+    '        say [hi]',
+  ].join('\n'));
+  check('costume validation warns on empty costume (uses default placeholder)',
+        emptyCostume.warnings.some(w => /placeholder/i.test(w.msg)), JSON.stringify(emptyCostume.warnings));
+  // An empty text costume falls back to visible default art, not a blank SVG.
+  const emptyProject = COMPILE.compile(emptyCostume.program);
+  const emptyArt = emptyProject.targets[1]._scratchTextCostumes[0];
+  check('empty costume renders a visible default placeholder',
+        emptyArt && /<circle/.test(emptyArt.svg) && emptyArt.name === 'F', emptyArt && emptyArt.svg);
+
+  // ---- Variable/list monitors are emitted (hidden) ----
+  const monProj = COMPILE.compile(PARSER.parseProgram([
+    'when flag clicked',
+    'set [score v] to (0)',
+    'add [x] to [things v]',
+    'show variable [score v]',
+  ].join('\n')).program);
+  const scoreMon = monProj.monitors.find(m => m.opcode === 'data_variable' && m.params.VARIABLE === 'score');
+  const listMon = monProj.monitors.find(m => m.opcode === 'data_listcontents' && m.params.LIST === 'things');
+  check('variable monitor emitted (hidden by default)', scoreMon && scoreMon.visible === false, JSON.stringify(scoreMon));
+  check('list monitor emitted', !!listMon);
+
+  // ---- String/label content is opaque (may contain < > ( ) etc.) ----
+  const punct = PARSER.parseProgram([
+    'when flag clicked',
+    'say [>> go fast <<]',
+    'say [a > b and (c)]',
+    'sprite Hero',
+    '    costume Title',
+    '        canvas (100) (40)',
+    '        text [<< PRESS START >>] (50) (20) (10) [#ffffff c]',
+  ].join('\n'));
+  check('opaque labels parse without errors', punct.errors.length === 0, JSON.stringify(punct.errors));
+  check('opaque label keeps < > literally',
+        punct.program.scripts[0].body[0].args[0].value === '>> go fast <<',
+        JSON.stringify(punct.program.scripts[0].body[0].args[0]));
+
+  const multiSpriteSample = [
+    'character Cat',
+    '    costume CatFace',
+    '        canvas (64) (64)',
+    '        circle (32) (32) (28) [#ffcc66 c]',
+    '        circle (22) (25) (4) [#000000 c]',
+    '        circle (42) (25) (4) [#000000 c]',
+    '        line (22) (43) (42) (43) [#000000 c] (3)',
+    '    when flag clicked',
+    '        say [cat flag]',
+    '    when [space v] key pressed',
+    '        say [cat space]',
+    '',
+    'character Dog',
+    '    when flag clicked',
+    '        say [dog flag]',
+    '        broadcast [woof v]',
+    '',
+    'character Cat',
+    '    when [up arrow v] key pressed',
+    '        say [cat up]',
+  ].join('\n');
+
+  const multi = PARSER.parseProgram(multiSpriteSample);
+  check('multi-sprite no parse errors', multi.errors.length === 0, JSON.stringify(multi.errors));
+  const catAst = multi.program.sprites.find(s => s.name === 'Cat');
+  const dogAst = multi.program.sprites.find(s => s.name === 'Dog');
+  check('multi-sprite AST groups repeated character',
+        multi.program.sprites.length === 2 && catAst && catAst.scripts.length === 3 && dogAst && dogAst.scripts.length === 1,
+        JSON.stringify(multi.program.sprites.map(s => [s.name, s.scripts.length])));
+  check('costume AST parsed',
+        catAst && catAst.costumes.length === 1 && catAst.costumes[0].name === 'CatFace' &&
+        catAst.costumes[0].shapes.length === 4,
+        JSON.stringify(catAst && catAst.costumes));
+  const multiProject = COMPILE.compile(multi.program);
+  const catTarget = multiProject.targets.find(t => t.name === 'Cat');
+  const dogTarget = multiProject.targets.find(t => t.name === 'Dog');
+  check('multi-sprite targets exported',
+        multiProject.targets.length === 3 && catTarget && dogTarget);
+  check('multi-sprite script counts exported',
+        Object.values(catTarget.blocks).filter(b => b.topLevel).length === 3 &&
+        Object.values(dogTarget.blocks).filter(b => b.topLevel).length === 1);
+  check('multi-sprite positions staggered',
+        catTarget.x !== dogTarget.x && catTarget.layerOrder === 1 && dogTarget.layerOrder === 2,
+        `${catTarget.x},${dogTarget.x}`);
+  check('multi-sprite shared broadcast',
+        Object.values(multiProject.targets[0].broadcasts).indexOf('woof') >= 0);
+  check('designed costume compiled',
+        catTarget._scratchTextCostumes && catTarget._scratchTextCostumes.length === 1 &&
+        /<circle/.test(catTarget._scratchTextCostumes[0].svg) &&
+        catTarget._scratchTextCostumes[0].rotationCenterX === 32);
+  check('designed costume not in json',
+        JSON.stringify(multiProject).indexOf('_scratchTextCostumes') < 0);
+
+  const stageSample = [
+    'stage',
+    '    backdrop Sky',
+    '        canvas (480) (360)',
+    '        rect (0) (0) (480) (360) [#88ccff c]',
+    '    backdrop Night',
+    '        canvas (480) (360)',
+    '        rect (0) (0) (480) (360) [#111133 c]',
+    '    current backdrop [Night v]',
+    '    when green flag clicked',
+    '        switch backdrop to [Sky v]',
+    '    when backdrop switches to [Night v]',
+    '        say [stage script]',
+    '',
+    'character Player',
+    '    costume Idle',
+    '        canvas (64) (64)',
+    '        circle (32) (32) (28) [#ffcc66 c]',
+    '    position x: (0) y: (-100)',
+    '    size (90)',
+    '    direction (45)',
+    '    visible true',
+    '    when flag clicked',
+    '        go to x: (0) y: (-100)',
+    '',
+    'sprite Enemy',
+    '    costume Default',
+    '        canvas (32) (32)',
+    '        rect (0) (0) (32) (32) [#ff3333 c]',
+    '    visible false',
+    '    when flag clicked',
+    '        show',
+  ].join('\n');
+
+  const staged = PARSER.parseProgram(stageSample);
+  check('stage sample no parse errors', staged.errors.length === 0, JSON.stringify(staged.errors));
+  check('stage AST has scripts and backdrops',
+        staged.program.stage.scripts.length === 2 && staged.program.stage.backdrops.length === 2);
+  check('stage sample has two sprites', staged.program.sprites.length === 2);
+  const stagedProject = COMPILE.compile(staged.program);
+  const stagedStage = stagedProject.targets.find(t => t.isStage);
+  const playerTarget = stagedProject.targets.find(t => t.name === 'Player');
+  const enemyTarget = stagedProject.targets.find(t => t.name === 'Enemy');
+  check('stage sample targets exported',
+        stagedProject.targets.length === 3 && stagedStage && playerTarget && enemyTarget);
+  check('stage code lands on stage target',
+        Object.values(stagedStage.blocks).filter(b => b.topLevel).length === 2 &&
+        Object.values(stagedStage.blocks).some(b => b.opcode === 'event_whenbackdropswitchesto'));
+  check('sprite code stays on sprite target',
+        Object.values(playerTarget.blocks).some(b => b.opcode === 'motion_gotoxy') &&
+        !Object.values(stagedStage.blocks).some(b => b.opcode === 'motion_gotoxy'));
+  check('stage current backdrop resolved',
+        stagedStage.currentCostume === 1 &&
+        stagedStage._scratchTextCostumes && stagedStage._scratchTextCostumes.length === 2);
+  check('sprite properties exported',
+        playerTarget.x === 0 && playerTarget.y === -100 && playerTarget.size === 90 &&
+        playerTarget.direction === 45 && enemyTarget.visible === false);
+  check('target-local deterministic block ids',
+        Object.keys(stagedStage.blocks).every(id => id.indexOf('b_stage_') === 0) &&
+        Object.keys(playerTarget.blocks).every(id => id.indexOf('b_sprite_1_Player_') === 0));
+  check('compiler output deterministic',
+        JSON.stringify(COMPILE.compile(staged.program)) === JSON.stringify(COMPILE.compile(staged.program)));
+
+  // Error recovery: unknown block should produce an error, not crash.
+  const bad = PARSER.parseProgram('when flag clicked\nabracadabra foo\nmove (5) steps');
+  check('unknown block -> error', bad.errors.length >= 1);
+  check('unknown block -> program continues',
+        bad.program.scripts.length === 1 && bad.program.scripts[0].body.length === 1);
+
+  // Comment / blank handling.
+  const commented = PARSER.parseProgram('// hi\nwhen flag clicked\n# a note\nsay [hey]\n');
+  check('comments no errors', commented.errors.length === 0);
+  check('comments parse script', commented.program.scripts.length === 1);
+
+  // ---- Custom procedures (My Blocks) ----
+  const procSrc = [
+    'define jump (height) says [msg]',
+    '    say [msg]',
+    '    change y by (height)',
+    '',
+    'when flag clicked',
+    '    jump (10) says [Hello!]',
+  ].join('\n');
+
+  const proc = PARSER.parseProgram(procSrc);
+  check('custom proc parse no errors', proc.errors.length === 0, JSON.stringify(proc.errors));
+  const procSprite = proc.program.sprites[0];
+  check('custom proc scripts count', procSprite.scripts.length === 2, 'got ' + procSprite.scripts.length);
+
+  const procProject = COMPILE.compile(proc.program);
+  const procTarget = procProject.targets[1];
+  const procBlocks = Object.values(procTarget.blocks);
+  const defBlock = procBlocks.find(b => b.opcode === 'procedures_definition');
+  check('custom proc definition emitted', !!defBlock);
+  if (defBlock) {
+    const protoId = defBlock.inputs.custom_block && defBlock.inputs.custom_block[1];
+    const protoBlock = procTarget.blocks[protoId];
+    check('custom proc prototype emitted', !!protoBlock);
+    if (protoBlock) {
+      const mut = protoBlock.mutation;
+      check('custom proc prototype proccode', mut && mut.proccode === 'jump %n says %s');
+      check('custom proc prototype argumentids', mut && mut.argumentids === '["arg_height","arg_msg"]');
+      check('custom proc prototype argumentnames', mut && mut.argumentnames === '["height","msg"]');
+      check('custom proc prototype argumentdefaults', mut && mut.argumentdefaults === '["0",""]');
+    }
+  }
+
+  const callBlock = procBlocks.find(b => b.opcode === 'procedures_call');
+  check('custom proc call emitted', !!callBlock);
+  if (callBlock) {
+    check('custom proc call mutation proccode', callBlock.mutation && callBlock.mutation.proccode === 'jump %n says %s');
+    check('custom proc call arg_height', callBlock.inputs.arg_height && callBlock.inputs.arg_height[1][1] === '10');
+    check('custom proc call arg_msg', callBlock.inputs.arg_msg && callBlock.inputs.arg_msg[1][1] === 'Hello!');
+  }
+
+  const argReporter = procBlocks.find(b => b.opcode === 'argument_reporter_string_number');
+  check('custom proc arg reporter emitted', !!argReporter);
+  if (argReporter) {
+    check('custom proc arg reporter field', argReporter.fields.VALUE && argReporter.fields.VALUE[0] === 'msg');
+  }
+
+} catch (e) {
+  log('EXCEPTION: ' + e.message + '\n' + e.stack);
+  fail++;
+}
+
+lines.unshift('=== ' + pass + ' PASS, ' + fail + ' FAIL ===');
+out.textContent = lines.join('\n');
+</script>
+</body>
+</html>

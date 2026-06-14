@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Scratch Text — write Scratch as text</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<header>
+  <h1>Scratch Text</h1>
+  <span class="tag">write <code>.sb3</code> as plain text</span>
+  <span class="spacer"></span>
+  <input id="loadFile" type="file" accept=".sb3,application/zip" hidden />
+  <button id="load">Load .sb3</button>
+  <button id="download">Download .sb3</button>
+</header>
+
+<main>
+  <section id="editorPane">
+    <div class="paneHead">
+      <span>Editor</span>
+      <span class="hint">syntax: <code>stage</code>, <code>backdrop Name</code>, <code>character Name</code>, <code>costume Name</code>, <code>(n)</code>, <code>[s]</code>, <code>[x v]</code>, <code>[#ff0000 c]</code>, <code>&lt;b&gt;</code> · costume coords: <code>(0,0)</code> = top-left, centre = <code>(w/2, h/2)</code> (not Scratch's centred stage coords)
+    </div>
+    <textarea id="editor" spellcheck="false" autocomplete="off" autocorrect="off" autocapitalize="off"></textarea>
+  </section>
+
+  <section id="rightPane">
+    <div class="paneHead">
+      <span>Preview</span>
+      <span class="hint">rendered blocks</span>
+    </div>
+    <div id="preview"></div>
+    <div class="paneHead">
+      <span>Problems</span>
+      <span id="errCount" class="hint">0</span>
+    </div>
+    <div id="errors"></div>
+    <div class="paneHead">
+      <span>Supported blocks</span>
+      <button id="toggleHelp" class="link">show</button>
+    </div>
+    <div id="help" hidden></div>
+  </section>
+</main>
+
+<script src="vendor/jszip.min.js"></script>
+<script src="vendor/scratchblocks.min.js"></script>
+<script src="src/md5.js"></script>
+<script src="src/blocks.js"></script>
+<script src="src/parser.js"></script>
+<script src="src/compile.js"></script>
+<script src="src/decompile.js"></script>
+<script src="src/sb3.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>

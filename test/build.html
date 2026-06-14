@@ -1,0 +1,205 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Build test (sync)</title>
+<style>body { font-family: monospace; font-size: 11px; white-space: pre; padding: 8px; }</style>
+</head>
+<body>
+<div id="out">...</div>
+<script src="../src/md5.js"></script>
+<script src="../src/blocks.js"></script>
+<script src="../src/parser.js"></script>
+<script src="../src/compile.js"></script>
+<script src="../src/sb3.js"></script>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let pass = 0, fail = 0;
+function check(name, cond, detail) {
+  if (cond) { pass++; lines.push('PASS ' + name + (detail ? ' ' + detail : '')); }
+  else      { fail++; lines.push('FAIL ' + name + (detail ? ' ' + detail : '')); }
+}
+
+try {
+  const sample = [
+    'character Cat',
+    'costume CatFace',
+    '    canvas (64) (64)',
+    '    circle (32) (32) (28) [#ffcc66 c]',
+    '    circle (22) (25) (4) [#000000 c]',
+    '    circle (42) (25) (4) [#000000 c]',
+    '    line (22) (43) (42) (43) [#000000 c] (3)',
+    'when flag clicked',
+    'say [Hello!] for (2) seconds',
+    'set [score v] to (0)',
+    'broadcast [start v]',
+    'add [apple] to [items v]',
+    'erase all',
+    'pen down',
+    'set pen color to [#00ff00 c]',
+    'set pen size to (3)',
+    'forever',
+    '    move (10) steps',
+    '    if on edge, bounce',
+    '    change [score v] by (1)',
+    '    if <touching color [#ff0000 c]?> then',
+    '        say [red]',
+    '    end',
+    'end',
+    '',
+    'character Dog',
+    'costume DogFace',
+    '    canvas (64) (64)',
+    '    rect (14) (16) (36) (32) [#9966ff c]',
+    '    circle (24) (28) (4) [#ffffff c]',
+    '    circle (40) (28) (4) [#ffffff c]',
+    'when flag clicked',
+    'say [Dog here]',
+  ].join('\n');
+
+  const { program, errors } = PARSER.parseProgram(sample);
+  check('no parse errors', errors.length === 0, JSON.stringify(errors));
+  const project = COMPILE.compile(program);
+
+  // Attach assets synchronously (this mutates the project in place).
+  const { assets } = SB3.attachAssets(project);
+  check('3 assets produced', assets.length === 3, 'got ' + assets.length);
+  check('stage has costume', project.targets[0].costumes.length === 1);
+  const spriteTargets = project.targets.filter(t => !t.isStage);
+  check('sprites exported', spriteTargets.length === 2, 'got ' + spriteTargets.length);
+  check('all sprites have costume', spriteTargets.every(t => t.costumes.length === 1));
+  check('custom costume names exported',
+        spriteTargets[0].costumes[0].name === 'CatFace' && spriteTargets[1].costumes[0].name === 'DogFace');
+
+  const c0 = project.targets[0].costumes[0];
+  const c1 = spriteTargets[0].costumes[0];
+  check('stage md5ext shape', /^[0-9a-f]{32}\.svg$/.test(c0.md5ext), c0.md5ext);
+  check('sprite md5ext shape', /^[0-9a-f]{32}\.svg$/.test(c1.md5ext), c1.md5ext);
+  check('assetId matches md5ext', c0.assetId + '.svg' === c0.md5ext);
+
+  // Asset bytes must actually hash to the referenced assetId.
+  const stageBytes = assets[0].data;
+  const spriteBytes = assets[1].data;
+  check('asset[0] name matches hash', assets[0].name === MD5.md5Bytes(stageBytes) + '.svg');
+  check('asset[1] name matches hash', assets[1].name === MD5.md5Bytes(spriteBytes) + '.svg');
+
+  // project.json must be JSON.stringify-round-trippable with no undefined leaks.
+  const json = JSON.stringify(project);
+  const round = JSON.parse(json);
+  check('json round-trip', round.targets.length === 3);
+  check('no undefined values', !/\"undefined\"|:\s*undefined/.test(json));
+  check('round-trip keeps list', Object.values(round.targets[0].lists).some(v => v[0] === 'items'));
+  check('round-trip keeps broadcast', Object.values(round.targets[0].broadcasts).indexOf('start') >= 0);
+  check('round-trip keeps pen extension', round.extensions.indexOf('pen') >= 0);
+
+  // Sanity-check block linking: every non-topLevel block has a parent that exists.
+  let linkOk = true, linkBad = '';
+  for (const sprite of spriteTargets) {
+    for (const id of Object.keys(sprite.blocks)) {
+      const b = sprite.blocks[id];
+      if (!b.topLevel && b.parent !== null && !sprite.blocks[b.parent]) {
+        linkOk = false; linkBad = `${sprite.name}:${id} -> ${b.parent}`; break;
+      }
+    }
+    if (!linkOk) break;
+  }
+  check('all block parents resolve', linkOk, linkBad);
+
+  // Every `next` reference, if set, must resolve.
+  let nextOk = true, nextBad = '';
+  for (const sprite of spriteTargets) {
+    for (const id of Object.keys(sprite.blocks)) {
+      const b = sprite.blocks[id];
+      if (b.next !== null && !sprite.blocks[b.next]) { nextOk = false; nextBad = `${sprite.name}:${id} -> ${b.next}`; break; }
+    }
+    if (!nextOk) break;
+  }
+  check('all next pointers resolve', nextOk, nextBad);
+
+  // Every SUBSTACK / CONDITION / NUM1 etc. block reference must resolve.
+  let inpOk = true, inpBad = '';
+  for (const sprite of spriteTargets) {
+    for (const id of Object.keys(sprite.blocks)) {
+      const b = sprite.blocks[id];
+      for (const inpName of Object.keys(b.inputs)) {
+        const v = b.inputs[inpName];
+        if (!Array.isArray(v)) continue;
+        // v = [type, a, b?]
+        for (let k = 1; k < v.length; k++) {
+          if (typeof v[k] === 'string') {
+            if (!sprite.blocks[v[k]]) { inpOk = false; inpBad = `${sprite.name}:${id}.${inpName} -> ${v[k]}`; break; }
+          }
+        }
+        if (!inpOk) break;
+      }
+      if (!inpOk) break;
+    }
+    if (!inpOk) break;
+  }
+  check('all input references resolve', inpOk, inpBad);
+
+  const externalSample = [
+    'stage',
+    '    backdrop Sky from "assets/sky.svg"',
+    '    backdrop Pixel from "assets/pixel.png"',
+    '    current backdrop [Pixel v]',
+    '    when backdrop switches to [Pixel v]',
+    '        say [pixel]',
+    '',
+    'sprite Player',
+    '    costume Idle from "assets/player.svg"',
+    '    when flag clicked',
+    '        say [ready]',
+  ].join('\n');
+  const external = PARSER.parseProgram(externalSample);
+  check('external sample parses', external.errors.length === 0, JSON.stringify(external.errors));
+  const externalProject = COMPILE.compile(external.program);
+  const png1x1 = Uint8Array.from([
+    137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82,
+    0, 0, 0, 1, 0, 0, 0, 1, 8, 4, 0, 0, 0, 181, 28, 12, 2,
+    0, 0, 0, 11, 73, 68, 65, 84, 120, 218, 99, 248, 255, 31, 0,
+    3, 3, 2, 0, 239, 191, 167, 219, 0, 0, 0, 0, 73, 69, 78, 68,
+    174, 66, 96, 130,
+  ]);
+  const externalAssets = SB3.attachAssets(externalProject, {
+    resolveAsset(assetPath) {
+      if (assetPath === 'assets/sky.svg') {
+        return '<svg xmlns="http://www.w3.org/2000/svg" width="480" height="360"><rect width="480" height="360" fill="#88ccff"/></svg>';
+      }
+      if (assetPath === 'assets/pixel.png') return png1x1;
+      if (assetPath === 'assets/player.svg') {
+        return '<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48"><circle cx="24" cy="24" r="20" fill="#ff3333"/></svg>';
+      }
+      return null;
+    },
+  }).assets;
+  const externalStage = externalProject.targets[0];
+  const externalPlayer = externalProject.targets[1];
+  check('external assets produced', externalAssets.length === 3, 'got ' + externalAssets.length);
+  check('stage has multiple backdrops',
+        externalStage.costumes.length === 2 && externalStage.costumes[0].dataFormat === 'svg' &&
+        externalStage.costumes[1].dataFormat === 'png');
+  check('current backdrop exported', externalStage.currentCostume === 1);
+  check('stage code exported',
+        Object.values(externalStage.blocks).some(b => b.opcode === 'event_whenbackdropswitchesto'));
+  check('sprite external costume exported',
+        externalPlayer.costumes.length === 1 && externalPlayer.costumes[0].dataFormat === 'svg');
+  check('png md5ext shape', /^[0-9a-f]{32}\.png$/.test(externalStage.costumes[1].md5ext),
+        externalStage.costumes[1].md5ext);
+  check('missing external asset throws', (() => {
+    const missing = COMPILE.compile(PARSER.parseProgram('sprite Missing\ncostume Bad from "missing.svg"').program);
+    try { SB3.attachAssets(missing); }
+    catch (e) { return /Missing asset resolver|Asset not found/.test(e.message); }
+    return false;
+  })());
+} catch (e) {
+  lines.push('EXCEPTION: ' + e.message);
+  fail++;
+}
+
+lines.unshift('=== ' + pass + ' PASS, ' + fail + ' FAIL ===');
+out.textContent = lines.join('\n');
+</script>
+</body>
+</html>

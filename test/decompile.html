@@ -1,0 +1,434 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Decompile test</title>
+<style>body { font-family: monospace; font-size: 11px; white-space: pre; padding: 8px; }
+.ok { color: #060; } .bad { color: #c00; }</style>
+</head>
+<body>
+<div id="out">running...</div>
+
+<script src="../src/md5.js"></script>
+<script src="../src/blocks.js"></script>
+<script src="../src/parser.js"></script>
+<script src="../src/compile.js"></script>
+<script src="../src/decompile.js"></script>
+<script>
+const out = document.getElementById('out');
+const lines = [];
+let pass = 0, fail = 0;
+function log(msg) { lines.push(msg); }
+function check(name, cond, detail) {
+  if (cond) { pass++; log('PASS ' + name + (detail ? ' ' + detail : '')); }
+  else      { fail++; log('FAIL ' + name + (detail ? ' ' + detail : '')); }
+}
+
+// ---- normalize a target to a block-id-independent shape ----
+function serializeInput(inp, target) {
+  if (!Array.isArray(inp)) return inp;
+  const val = inp[1];
+  if (typeof val === 'string') {
+    return [inp[0], serializeBlock(val, target), inp[2] !== undefined ? inp[2] : null];
+  }
+  return inp;
+}
+function serializeBlock(id, target) {
+  const b = target.blocks[id];
+  if (!b) return null;
+  const inputs = {};
+  for (const k of Object.keys(b.inputs).sort()) inputs[k] = serializeInput(b.inputs[k], target);
+  return {
+    opcode: b.opcode,
+    fields: b.fields,
+    inputs,
+    mutation: b.mutation || null,
+    next: b.next ? serializeBlock(b.next, target) : null,
+  };
+}
+function topIds(target) {
+  return Object.keys(target.blocks).filter(id => target.blocks[id].topLevel)
+    .sort((a, b) => {
+      const A = target.blocks[a], B = target.blocks[b];
+      return (A.x - B.x) || (A.y - B.y);
+    });
+}
+function normalizeTarget(target) {
+  return JSON.stringify({
+    name: target.name,
+    isStage: target.isStage,
+    scripts: topIds(target).map(id => serializeBlock(id, target)),
+    variables: target.variables,
+    lists: target.lists,
+    broadcasts: target.broadcasts,
+    x: target.x, y: target.y, size: target.size, direction: target.direction,
+    visible: target.visible, draggable: target.draggable,
+    rotationStyle: target.rotationStyle, currentCostume: target.currentCostume,
+  });
+}
+
+// Source -> compile -> decompile -> reparse -> recompile, then compare the
+// block structure of every target (costume artwork is intentionally ignored).
+function roundTrip(name, src) {
+  let A, T, re, B;
+  try { A = COMPILE.compile(PARSER.parseProgram(src).program); }
+  catch (e) { check(name + ' compile A', false, e.message); return; }
+  try { T = DECOMPILE.decompile(A); }
+  catch (e) { check(name + ' decompile', false, e.message + '\n' + e.stack); return; }
+  re = PARSER.parseProgram(T);
+  check(name + ' reparse no errors', re.errors.length === 0, JSON.stringify(re.errors) + '\n--- text ---\n' + T);
+  try { B = COMPILE.compile(re.program); }
+  catch (e) { check(name + ' compile B', false, e.message); return; }
+
+  check(name + ' same target count', A.targets.length === B.targets.length,
+        `A=${A.targets.length} B=${B.targets.length}\n${T}`);
+  check(name + ' same extensions',
+        JSON.stringify(A.extensions.slice().sort()) === JSON.stringify(B.extensions.slice().sort()),
+        JSON.stringify(A.extensions) + ' vs ' + JSON.stringify(B.extensions));
+  const n = Math.min(A.targets.length, B.targets.length);
+  for (let i = 0; i < n; i++) {
+    const na = normalizeTarget(A.targets[i]);
+    const nb = normalizeTarget(B.targets[i]);
+    check(`${name} target[${i}] (${A.targets[i].name}) matches`, na === nb,
+          na === nb ? '' : `\n--- text ---\n${T}\n--- A ---\n${na}\n--- B ---\n${nb}`);
+  }
+}
+
+try {
+  // ---- 1. Basic motion/looks/control + variables + nested if ----
+  roundTrip('basic', [
+    'when flag clicked',
+    'say [Hello, Scratch Text!] for (2) seconds',
+    'set [score v] to (0)',
+    'forever',
+    '    move (10) steps',
+    '    if on edge, bounce',
+    '    change [score v] by (1)',
+    '    if <(score) > (20)> then',
+    '        say [Twenty points!] for (1) seconds',
+    '    end',
+    'end',
+    '',
+    'when [space v] key pressed',
+    'turn cw (15) degrees',
+  ].join('\n'));
+
+  // ---- 2. if/else + booleans + reporters nested ----
+  roundTrip('ifelse', [
+    'when flag clicked',
+    'set [n v] to (pick random (1) to (10))',
+    'if <<(n) > (5)> and <not <mouse down?>>> then',
+    '    say (join [big ] (n))',
+    'else',
+    '    say [small]',
+    'end',
+  ].join('\n'));
+
+  // ---- 3. Extended coverage (menus, lists, broadcasts, sensing) ----
+  roundTrip('extended', [
+    'when flag clicked',
+    'go to [mouse-pointer v]',
+    'glide (1) secs to [random position v]',
+    'point towards [mouse-pointer v]',
+    'switch costume to [costume1 v]',
+    'next backdrop',
+    'change [ghost v] effect by (10)',
+    'broadcast [start v]',
+    'broadcast [done v] and wait',
+    'add [apple] to [items v]',
+    'delete [last v] of [items v]',
+    'insert [pear] at (1) of [items v]',
+    'replace item (1) of [items v] with [banana]',
+    'say (item (1) of [items v])',
+    'say (length of [items v])',
+    'say (letter (1) of [apple])',
+    'say ([abs v] of (-3))',
+    'say (distance to [mouse-pointer v])',
+    'say (costume [number v])',
+    'say ([x position v] of [Stage v])',
+    'if <[items v] contains [banana] ?> then',
+    '    say [has banana]',
+    'end',
+    'if <touching [mouse-pointer v]?> then',
+    '    say [touch]',
+    'end',
+    'if <touching color [#ff0000 c]?> then',
+    '    say [red]',
+    'end',
+    'create clone of [myself v]',
+    '',
+    'when I receive [start v]',
+    'say (username)',
+    '',
+    'when backdrop switches to [backdrop1 v]',
+    'say [changed]',
+    '',
+    'when I start as a clone',
+    'delete this clone',
+  ].join('\n'));
+
+  // ---- 4. Pen extension ----
+  roundTrip('pen', [
+    'when flag clicked',
+    'erase all',
+    'stamp',
+    'pen down',
+    'set pen color to [#00ff00 c]',
+    'set pen [saturation v] to (75)',
+    'change pen size by (2)',
+    'pen up',
+  ].join('\n'));
+
+  // ---- 5. Multi-sprite with costumes ----
+  roundTrip('multi', [
+    'character Cat',
+    '    costume CatFace',
+    '        canvas (64) (64)',
+    '        circle (32) (32) (28) [#ffcc66 c]',
+    '    when flag clicked',
+    '        say [cat flag]',
+    '    when [space v] key pressed',
+    '        say [cat space]',
+    '',
+    'character Dog',
+    '    when flag clicked',
+    '        say [dog flag]',
+    '        broadcast [woof v]',
+  ].join('\n'));
+
+  // ---- 6. Stage + backdrops + sprite metadata + current backdrop ----
+  roundTrip('stage', [
+    'stage',
+    '    backdrop Sky',
+    '        canvas (480) (360)',
+    '        rect (0) (0) (480) (360) [#88ccff c]',
+    '    backdrop Night',
+    '        canvas (480) (360)',
+    '        rect (0) (0) (480) (360) [#111133 c]',
+    '    current backdrop [Night v]',
+    '    when green flag clicked',
+    '        switch backdrop to [Sky v]',
+    '    when backdrop switches to [Night v]',
+    '        say [stage script]',
+    '',
+    'sprite Player',
+    '    position x: (0) y: (-100)',
+    '    size (90)',
+    '    direction (45)',
+    '    visible false',
+    '    when flag clicked',
+    '        go to x: (0) y: (-100)',
+  ].join('\n'));
+
+  // ---- 7. Custom procedures (My Blocks) ----
+  roundTrip('procedures', [
+    'define jump (height) says [msg]',
+    '    say [msg]',
+    '    change y by (height)',
+    '',
+    'when flag clicked',
+    '    jump (10) says [Hello!]',
+  ].join('\n'));
+
+  // ---- 7b. Music extension (menus + numbers + reporter) ----
+  roundTrip('music', [
+    'when flag clicked',
+    'set instrument to [2 v]',
+    'set tempo to (120)',
+    'play drum [1 v] for (0.25) beats',
+    'rest for (0.5) beats',
+    'play note (60) for (0.25) beats',
+    'change tempo by (20)',
+    'say (tempo)',
+  ].join('\n'));
+
+  // Structural: music blocks compile to menu shadows + the music extension.
+  {
+    const mp = COMPILE.compile(PARSER.parseProgram([
+      'when flag clicked',
+      'play drum [3 v] for (0.5) beats',
+      'set instrument to [5 v]',
+    ].join('\n')).program);
+    const blocks = mp.targets[1].blocks;
+    const drum = Object.values(blocks).find(b => b.opcode === 'music_playDrumForBeats');
+    const inst = Object.values(blocks).find(b => b.opcode === 'music_setInstrument');
+    check('music extension exported', mp.extensions.indexOf('music') >= 0, JSON.stringify(mp.extensions));
+    check('drum menu shadow normalized',
+          drum && typeof drum.inputs.DRUM[1] === 'string' &&
+          blocks[drum.inputs.DRUM[1]].opcode === 'music_menu_DRUM' &&
+          blocks[drum.inputs.DRUM[1]].fields.DRUM[0] === '3',
+          JSON.stringify(drum && drum.inputs.DRUM));
+    check('instrument menu shadow normalized',
+          inst && blocks[inst.inputs.INSTRUMENT[1]].opcode === 'music_menu_INSTRUMENT' &&
+          blocks[inst.inputs.INSTRUMENT[1]].fields.INSTRUMENT[0] === '5');
+    // Decompile reverses the menu shadow back to the dropdown form.
+    const T = DECOMPILE.decompile(mp);
+    check('music decompiles drum dropdown', /play drum \[3 v\] for \(0\.5\) beats/.test(T), '\n' + T);
+    check('music decompiles instrument dropdown', /set instrument to \[5 v\]/.test(T), '\n' + T);
+  }
+
+  // ---- 7c. Local ("for this sprite only") vs global variables & lists ----
+  const localSample = [
+    'sprite Hero',
+    '    local variable [health]',
+    '    local list [inventory]',
+    '    when flag clicked',
+    '        set [health v] to (100)',
+    '        set [score v] to (0)',
+    '        add [sword] to [inventory v]',
+    '        add [coin] to [loot v]',
+    '',
+    'sprite Villain',
+    '    when flag clicked',
+    '        change [score v] by (1)',
+    '        set [health v] to (50)',
+  ].join('\n');
+  roundTrip('locals', localSample);
+
+  // Structural: local names land on the sprite; global names land on the Stage;
+  // a sprite-local can shadow a same-named global used by another sprite.
+  {
+    const A = COMPILE.compile(PARSER.parseProgram(localSample).program);
+    const stage = A.targets[0];
+    const hero = A.targets.find(t => t.name === 'Hero');
+    const villain = A.targets.find(t => t.name === 'Villain');
+    const stageVar = n => Object.values(stage.variables).some(v => v[0] === n);
+    const heroVar = n => Object.values(hero.variables).some(v => v[0] === n);
+    check('global var on stage', stageVar('score'));
+    check('local var on sprite', heroVar('health'));
+    check('local list on sprite', Object.values(hero.lists).some(v => v[0] === 'inventory'));
+    check('global list on stage', Object.values(stage.lists).some(v => v[0] === 'loot'));
+    check('shadowing: global health also exists', stageVar('health'));
+    // Hero's `set health` references the LOCAL id (present in hero.variables).
+    const heroSet = Object.values(hero.blocks).find(b => b.opcode === 'data_setvariableto' && b.fields.VARIABLE[0] === 'health');
+    check('hero health -> local id', heroSet && !!hero.variables[heroSet.fields.VARIABLE[1]],
+          heroSet && JSON.stringify(heroSet.fields.VARIABLE));
+    // Villain has no local health -> references the GLOBAL id (on the Stage).
+    const villainSet = Object.values(villain.blocks).find(b => b.opcode === 'data_setvariableto' && b.fields.VARIABLE[0] === 'health');
+    check('villain health -> global id', villainSet && !!stage.variables[villainSet.fields.VARIABLE[1]],
+          villainSet && JSON.stringify(villainSet.fields.VARIABLE));
+    check('local and global health ids differ',
+          heroSet && villainSet && heroSet.fields.VARIABLE[1] !== villainSet.fields.VARIABLE[1]);
+    // Decompiler re-emits the local declarations.
+    const T = DECOMPILE.decompile(A);
+    check('decompile emits local variable', /local variable \[health\]/.test(T), '\n' + T);
+    check('decompile emits local list', /local list \[inventory\]/.test(T), '\n' + T);
+    check('decompile does not localize globals', T.indexOf('local variable [score]') < 0);
+  }
+
+  // ---- 7d. Sound, when-greater-than hat, set drag mode, current reporter ----
+  roundTrip('sound_misc', [
+    'when [loudness v] > (10)',
+    'say [loud!]',
+    '',
+    'when flag clicked',
+    'start sound [Meow v]',
+    'play sound [Pop v] until done',
+    'set volume to (80)',
+    'change volume by (-5)',
+    'stop all sounds',
+    'clear sound effects',
+    'set drag mode [draggable v]',
+    'say (volume)',
+    'say (current [year v])',
+  ].join('\n'));
+
+  // Structural: sound is a core category (no extension); the menu/field shapes.
+  {
+    const A = COMPILE.compile(PARSER.parseProgram([
+      'when flag clicked',
+      'play sound [Pop v] until done',
+      'set volume to (50)',
+    ].join('\n')).program);
+    const blocks = A.targets[1].blocks;
+    check('sound adds no extension', A.extensions.indexOf('sound') < 0 && A.extensions.length === 0,
+          JSON.stringify(A.extensions));
+    const play = Object.values(blocks).find(b => b.opcode === 'sound_playuntildone');
+    check('sound menu shadow', play && blocks[play.inputs.SOUND_MENU[1]].opcode === 'sound_sounds_menu' &&
+          blocks[play.inputs.SOUND_MENU[1]].fields.SOUND_MENU[0] === 'Pop',
+          play && JSON.stringify(play.inputs.SOUND_MENU));
+    const T = DECOMPILE.decompile(A);
+    check('sound decompiles dropdown', /play sound \[Pop v\] until done/.test(T), '\n' + T);
+  }
+
+  // ---- 7e. Custom block with "run without screen refresh" (warp) ----
+  roundTrip('warp', [
+    'define warp tightloop (n)',
+    '    repeat (n)',
+    '        change x by (1)',
+    '    end',
+    '',
+    'when flag clicked',
+    '    tightloop (10)',
+  ].join('\n'));
+  {
+    const A = COMPILE.compile(PARSER.parseProgram([
+      'define warp fast (n)',
+      '    change x by (n)',
+      '',
+      'when flag clicked',
+      '    fast (5)',
+    ].join('\n')).program);
+    const blocks = A.targets[1].blocks;
+    const proto = Object.values(blocks).find(b => b.opcode === 'procedures_prototype');
+    const call = Object.values(blocks).find(b => b.opcode === 'procedures_call');
+    check('warp prototype mutation', proto && proto.mutation.warp === 'true', proto && JSON.stringify(proto.mutation.warp));
+    check('warp call mutation', call && call.mutation.warp === 'true');
+    check('warp decompiles to "define warp"', /define warp fast \(n\)/.test(DECOMPILE.decompile(A)));
+    // A non-warp define stays warp:false.
+    const B = COMPILE.compile(PARSER.parseProgram('define slow\n    wait (1) seconds\n\nwhen flag clicked\n    slow').program);
+    const protoB = Object.values(B.targets[1].blocks).find(b => b.opcode === 'procedures_prototype');
+    check('non-warp define stays warp false', protoB && protoB.mutation.warp === 'false');
+  }
+
+  // ---- 8. Golden output: exact text for a small project ----
+  {
+    const A = COMPILE.compile(PARSER.parseProgram([
+      'when flag clicked',
+      'move (10) steps',
+      'if <mouse down?> then',
+      '    say [hi]',
+      'end',
+    ].join('\n')).program);
+    const T = DECOMPILE.decompile(A);
+    const expected = [
+      'sprite Sprite1',
+      'position x: (0) y: (0)',
+      '',
+      'when flag clicked',
+      'move (10) steps',
+      'if <mouse down?> then',
+      '    say [hi]',
+      'end',
+    ].join('\n') + '\n';
+    check('golden output exact', T === expected,
+          T === expected ? '' : '\n--- got ---\n' + JSON.stringify(T) + '\n--- want ---\n' + JSON.stringify(expected));
+  }
+
+  // ---- 9. Unknown opcode degrades to a comment ----
+  {
+    const fake = {
+      targets: [
+        { isStage: true, name: 'Stage', blocks: {}, costumes: [] },
+        { isStage: false, name: 'Sprite1', x: 0, y: 0, layerOrder: 1, costumes: [], blocks: {
+          h: { opcode: 'event_whenflagclicked', next: 'x', parent: null, inputs: {}, fields: {}, topLevel: true, x: 60, y: 60 },
+          x: { opcode: 'totally_made_up', next: null, parent: 'h', inputs: {}, fields: {}, topLevel: false },
+        } },
+      ],
+      monitors: [], extensions: [], meta: {},
+    };
+    const T = DECOMPILE.decompile(fake);
+    check('unknown opcode -> comment', T.indexOf('// unknown: totally_made_up') >= 0, '\n' + T);
+    check('unknown opcode keeps known block', T.indexOf('when flag clicked') >= 0);
+  }
+
+} catch (e) {
+  log('EXCEPTION: ' + e.message + '\n' + e.stack);
+  fail++;
+}
+
+lines.unshift('=== ' + pass + ' PASS, ' + fail + ' FAIL ===');
+out.textContent = lines.join('\n');
+</script>
+</body>
+</html>
