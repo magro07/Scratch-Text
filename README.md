@@ -680,7 +680,8 @@ are no issues, export and load the `.sb3` in Scratch for the final behavior.
 
 ## Current Limitations
 
-Not every Scratch feature is supported yet.
+Not every Scratch feature is supported yet. See [`ROADMAP.md`](ROADMAP.md) for
+the full picture of what works, what is limited, and what is planned.
 
 Currently missing or limited:
 
@@ -689,8 +690,8 @@ Currently missing or limited:
 - Running the project inside the editor (export to Scratch/TurboWarp to run).
 - Some Scratch extensions such as Translate, Video Sensing, and
   Text-to-Speech. (Pen and Music are supported.)
-- A visual costume editor.
-- Monitors (variable/list watchers on the stage) and block comments.
+- A visual costume editor and importing image assets by drag-and-drop.
+- Block comments.
 - Decompiling a `.sb3` recovers scripts, structure, and imported artwork, but
   costumes that were originally authored with the shape DSL come back as a
   bare `costume Name` (their drawn shapes are not recovered).
